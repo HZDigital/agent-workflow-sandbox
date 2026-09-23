@@ -1,3 +1,4 @@
+import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -6,6 +7,7 @@ import { createApp } from "./server.js";
 import type { TaskStore } from "./tasks/store.js";
 
 let baseUrl: string;
+let port: number;
 let store: TaskStore;
 let close: () => Promise<void>;
 
@@ -15,7 +17,8 @@ beforeAll(async () => {
 
   await new Promise<void>((resolve) => app.server.listen(0, "127.0.0.1", resolve));
   const address = app.server.address() as AddressInfo;
-  baseUrl = `http://127.0.0.1:${address.port}`;
+  port = address.port;
+  baseUrl = `http://127.0.0.1:${port}`;
 
   close = () =>
     new Promise<void>((resolve, reject) => {
@@ -45,6 +48,31 @@ async function api(
 
   const text = await response.text();
   return { status: response.status, body: text === "" ? undefined : JSON.parse(text) };
+}
+
+/**
+ * `fetch` refuses to send some malformed request targets (a lone `%` becomes
+ * `%25`), so the nastiest paths have to be written onto the socket by hand.
+ */
+const CRLF = "\r\n";
+
+function rawRequest(requestLine: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1", () => {
+      socket.write([requestLine, "Host: localhost", "Connection: close", "", ""].join(CRLF));
+    });
+
+    let data = "";
+    socket.setTimeout(5_000, () => {
+      socket.destroy();
+      reject(new Error("raw request timed out — the server probably died"));
+    });
+    socket.on("data", (chunk) => {
+      data += chunk.toString("utf8");
+    });
+    socket.on("end", () => resolve(data));
+    socket.on("error", reject);
+  });
 }
 
 describe("GET /health", () => {
@@ -163,6 +191,15 @@ describe("error handling", () => {
       "bad_request",
     );
 
+    expect((await api("GET", "/health")).status).toBe(200);
+  });
+
+  it("answers 400 for a lone percent sign on a raw socket and stays alive", async () => {
+    // The proof-of-concept that killed the process: `decodeURIComponent("%")`
+    // throws, and the throw used to escape the router entirely.
+    const response = await rawRequest("GET /tasks/% HTTP/1.1");
+
+    expect(response.split(CRLF)[0]).toBe("HTTP/1.1 400 Bad Request");
     expect((await api("GET", "/health")).status).toBe(200);
   });
 

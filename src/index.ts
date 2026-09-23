@@ -1,9 +1,11 @@
 import { createApp } from "./server.js";
 
-const port = Number(process.env["PORT"] ?? 3000);
+const rawPort = process.env["PORT"];
+// `Number("")` is 0, which would bind a random port instead of complaining.
+const port = rawPort === undefined || rawPort.trim() === "" ? 3000 : Number(rawPort);
 
 if (!Number.isInteger(port) || port < 0 || port > 65535) {
-  console.error(`PORT must be an integer between 0 and 65535, got "${process.env["PORT"]}".`);
+  console.error(`PORT must be an integer between 0 and 65535, got "${rawPort}".`);
   process.exit(1);
 }
 

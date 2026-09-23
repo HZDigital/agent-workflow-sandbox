@@ -84,9 +84,24 @@ real rather than mocked.
 
 `.github/workflows/test.yml` runs install → typecheck → test → build on every pull
 request and on every push to `main`. The job is called **`test`**, and that name is
-load-bearing: it is the check the branch ruleset on `main` requires, and the one
-signal in the pipeline that the automation cannot produce for itself.
+load-bearing: it is the check name the branch ruleset on `main` is configured
+against, and the one signal in the pipeline that the automation cannot produce for
+itself.
 
-A red `test` check blocks the merge. That is the whole safety story here, and it is
-why the check must stay honest — do not make it conditional, do not add
-`continue-on-error`, and do not let it pass on an empty test run.
+Keep the check honest: do not make it conditional, do not add `continue-on-error`,
+and do not let it pass on a test run that collected nothing.
+
+Two things that are true today and worth stating rather than assuming:
+
+- **The ruleset is not in place yet.** Until it is, `test` is a signal, not a gate.
+  The `rulesets` API answers `200` on this repo — which is the whole reason it is
+  public, since the org's GitHub free plan refuses rulesets on private repos.
+- **A required check pins a *name*, not its contents.** A pull request can edit
+  `.github/workflows/test.yml` in the same diff the check is gating, and GitHub will
+  happily report the weakened job as green under the required name. Closing that
+  needs a `CODEOWNERS` entry on `.github/**` plus "require review from Code Owners",
+  so a change to the gate needs a human the automation cannot impersonate.
+
+The actions are pinned to commit SHAs rather than to `@v7`, because a mutable major
+tag can be repointed upstream at code that then runs on every pull request here.
+The version is in the trailing comment; bump both together.
