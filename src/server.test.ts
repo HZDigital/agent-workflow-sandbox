@@ -153,6 +153,26 @@ describe("error handling", () => {
     expect(response.status).toBe(400);
   });
 
+  it("answers 400 for a malformed percent-escape and stays alive", async () => {
+    // `decodeURIComponent("%zz")` throws. Before this was handled, the throw
+    // escaped `handle`, became an unhandled rejection and killed the process —
+    // the second half of this test is the part that matters.
+    const response = await fetch(`${baseUrl}/tasks/%zz`);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      "bad_request",
+    );
+
+    expect((await api("GET", "/health")).status).toBe(200);
+  });
+
+  it("serves HEAD wherever it serves GET", async () => {
+    const response = await fetch(`${baseUrl}/health`, { method: "HEAD" });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("");
+  });
+
   it("returns 404 for an unknown route", async () => {
     const response = await api("GET", "/nope");
 

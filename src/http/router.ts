@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { HttpError, MethodNotAllowedError } from "./errors.js";
+import { BadRequestError, HttpError, MethodNotAllowedError } from "./errors.js";
 import { sendError } from "./json.js";
 
 export interface RequestContext {
@@ -23,6 +23,18 @@ function splitPath(path: string): string[] {
   return path.split("/").filter((segment) => segment.length > 0);
 }
 
+/**
+ * `decodeURIComponent` throws on a broken percent-escape such as `/tasks/%zz`.
+ * That is a client mistake, not a server fault, so it becomes a 400.
+ */
+function decodeSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new BadRequestError("A path segment is not valid percent-encoding.");
+  }
+}
+
 function matchSegments(
   pattern: string[],
   actual: string[],
@@ -35,7 +47,7 @@ function matchSegments(
     const received = actual[i] as string;
 
     if (expected.startsWith(":")) {
-      params[expected.slice(1)] = decodeURIComponent(received);
+      params[expected.slice(1)] = decodeSegment(received);
       continue;
     }
     if (expected !== received) return undefined;
@@ -75,32 +87,43 @@ export class Router {
     return this.add("DELETE", pattern, handler);
   }
 
+  /**
+   * Never rejects: everything a route can throw — including a malformed
+   * request target, which is parsed here rather than by the caller — is turned
+   * into a response. A rejection here would reach Node's unhandled-rejection
+   * handler and kill the process.
+   */
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const actual = splitPath(url.pathname);
-    const method = (req.method ?? "GET").toUpperCase();
-
-    let pathMatched = false;
-
-    for (const route of this.routes) {
-      const params = matchSegments(route.segments, actual);
-      if (!params) continue;
-      pathMatched = true;
-      if (route.method !== method) continue;
-
+    try {
+      let url: URL;
       try {
-        await route.handler({ req, res, params, query: url.searchParams });
-      } catch (error) {
-        sendError(res, error);
+        url = new URL(req.url ?? "/", "http://localhost");
+      } catch {
+        throw new BadRequestError("Request URL is malformed.");
       }
-      return;
-    }
 
-    sendError(
-      res,
-      pathMatched
+      const actual = splitPath(url.pathname);
+      const method = (req.method ?? "GET").toUpperCase();
+      // RFC 9110: HEAD must be served wherever GET is. Node drops the body for us.
+      const lookup = method === "HEAD" ? "GET" : method;
+
+      let pathMatched = false;
+
+      for (const route of this.routes) {
+        const params = matchSegments(route.segments, actual);
+        if (!params) continue;
+        pathMatched = true;
+        if (route.method !== lookup) continue;
+
+        await route.handler({ req, res, params, query: url.searchParams });
+        return;
+      }
+
+      throw pathMatched
         ? new MethodNotAllowedError(method, url.pathname)
-        : new HttpError(404, "route_not_found", `No route for ${method} ${url.pathname}.`),
-    );
+        : new HttpError(404, "route_not_found", `No route for ${method} ${url.pathname}.`);
+    } catch (error) {
+      sendError(res, error);
+    }
   }
 }
