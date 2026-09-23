@@ -6,3 +6,13 @@ coverage/
 .env.*
 !.env.example
 .DS_Store
+.vscode/
+*.tsbuildinfo
+
+# Credential-shaped files. This repo is public and agents commit unattended,
+# so the cost of a miss here is a live secret in public history.
+.npmrc
+*.pem
+*.key
+*.p12
+id_rsa*
