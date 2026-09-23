@@ -29,7 +29,12 @@ export function createApp(store: TaskStore = new TaskStore()): App {
   registerTaskRoutes(router, store);
 
   const server = createHttpServer((req, res) => {
-    void router.handle(req, res);
+    // `handle` is written not to reject; this is the belt to that suspenders,
+    // because an unhandled rejection here would take the process down.
+    router.handle(req, res).catch((error: unknown) => {
+      console.error("[router]", error);
+      res.destroy();
+    });
   });
 
   return { server, store };

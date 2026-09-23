@@ -18,5 +18,8 @@ server.listen(port, () => {
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     server.close(() => process.exit(0));
+    // Without this, close() waits for every keep-alive connection to go idle
+    // and Ctrl-C appears to hang — the default signal exit is gone by now.
+    server.closeAllConnections();
   });
 }

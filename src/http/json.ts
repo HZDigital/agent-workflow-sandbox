@@ -20,10 +20,21 @@ export function sendEmpty(res: ServerResponse, status: number): void {
 }
 
 export function sendError(res: ServerResponse, error: unknown): void {
+  if (!(error instanceof HttpError)) {
+    // The response says nothing useful on purpose; the stack has to go somewhere.
+    console.error("[unhandled]", error);
+  }
+
   const http =
     error instanceof HttpError
       ? error
       : new HttpError(500, "internal_error", "Something went wrong.");
+
+  // A handler that already started writing cannot be given an error body.
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
 
   sendJson(res, http.status, {
     error: {
