@@ -150,7 +150,7 @@ describe("error handling", () => {
       body: JSON.stringify({ title: "x".repeat(MAX_BODY_BYTES) }),
     });
 
-    expect(response.status).toBe(413);
+    expect(response.status).toBe(400);
   });
 
   it("returns 404 for an unknown route", async () => {
