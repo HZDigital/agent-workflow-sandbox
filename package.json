@@ -1,0 +1,22 @@
+{
+  "name": "agent-workflow-sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Disposable task-tracker API used as a working surface for the Agent-workflow pipeline.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
