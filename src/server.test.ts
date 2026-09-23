@@ -1,6 +1,7 @@
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { MAX_BODY_BYTES } from "./http/json.js";
 import { createApp } from "./server.js";
 import type { TaskStore } from "./tasks/store.js";
 
@@ -140,6 +141,16 @@ describe("error handling", () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("validation_error");
+  });
+
+  it("rejects a body larger than the limit", async () => {
+    const response = await fetch(`${baseUrl}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "x".repeat(MAX_BODY_BYTES) }),
+    });
+
+    expect(response.status).toBe(413);
   });
 
   it("returns 404 for an unknown route", async () => {
