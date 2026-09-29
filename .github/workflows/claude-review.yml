@@ -75,6 +75,16 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Install bubblewrap for the env scrub
+        # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB refuses to start without bwrap.
+        # Ubuntu 24.04's AppArmor blocks the unprivileged user namespaces bwrap
+        # needs, so allow them on this throwaway runner.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / true
+
       - name: Collect the diff and the reviewer's open threads
         # The model gets no GitHub tools at all. It reads these two files, so it
         # never sees PR comments, which anyone on the internet can write.
