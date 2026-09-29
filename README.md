@@ -88,7 +88,15 @@ load-bearing: it is the check name the branch ruleset on `main` is configured
 against, and the one signal in the pipeline that the automation cannot produce for
 itself.
 
-Keep the check honest: do not make it conditional, do not add `continue-on-error`,
+`.github/workflows/claude-review.yml` is the pipeline's cross-reviewer. On every
+non-draft PR from this repository, a read-only Claude reviews the diff, and a
+plain-code step posts the findings as one review whose inline comments are
+resolvable threads. Its `claude-review` check is **advisory** and stays out of
+the ruleset. The gate uses it; a merge never waits on it. It runs on the owner's
+Claude subscription (`CLAUDE_CODE_OAUTH_TOKEN`); see
+[`docs/SECURITY.md`](docs/SECURITY.md) for what it may touch.
+
+Keep the `test` check honest: do not make it conditional, do not add `continue-on-error`,
 and do not let it pass on a test run that collected nothing.
 
 Two things that are true today and worth stating rather than assuming:
