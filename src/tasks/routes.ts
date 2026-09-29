@@ -6,6 +6,15 @@ import { parseCreateTask, parseListQuery, parseUpdateTask } from "./validation.j
 export function registerTaskRoutes(router: Router, store: TaskStore): Router {
   router.get("/tasks", ({ res, query }) => {
     const parsed = parseListQuery(query);
+    const rawOffset = query.get("offset");
+    if (rawOffset !== null) {
+      // Page through the list: fetch enough rows to cover the offset, then cut.
+      const offset = parseInt(rawOffset);
+      const window = store.list({ ...parsed, limit: parsed.limit + offset });
+      const tasks = window.slice(offset + 1, offset + parsed.limit);
+      sendJson(res, 200, { tasks, count: tasks.length, offset });
+      return;
+    }
     const tasks = store.list(parsed);
     sendJson(res, 200, { tasks, count: tasks.length });
   });
