@@ -261,22 +261,23 @@ jobs:
           } else {
             // GitHub rejects the whole review if one comment is not on a diff
             // line, so work out which new-side lines the diff contains.
-            const diff = await gh(`/repos/${REPO}/pulls/${PR}`, { accept: "application/vnd.github.diff" });
+            // The files API gives each path verbatim; a raw diff quotes paths
+            // with spaces or special characters (found by claude-review on #5).
             const commentable = new Map(); // path -> [line, ...] in diff order
-            let file = null, line = 0, inHunk = false, prev = "";
-            for (const l of diff.split("\n")) {
-              if (l.startsWith("diff --git ")) { file = null; inHunk = false; }
-              else if (!inHunk && l.startsWith("+++ ") && prev.startsWith("--- ")) {
-                file = l === "+++ /dev/null" ? null : l.slice(6);
-              } else {
-                const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
-                if (hunk) { line = Number(hunk[1]); inHunk = true; }
-                else if (inHunk && file && (l.startsWith("+") || l.startsWith(" "))) {
-                  if (!commentable.has(file)) commentable.set(file, []);
-                  commentable.get(file).push(line++);
+            for (let page = 1; ; page++) {
+              const files = await gh(`/repos/${REPO}/pulls/${PR}/files?per_page=100&page=${page}`);
+              for (const f of files) {
+                if (!f.patch || f.status === "removed") continue;
+                const lines = [];
+                let line = 0;
+                for (const l of f.patch.split("\n")) {
+                  const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+                  if (hunk) line = Number(hunk[1]);
+                  else if (l.startsWith("+") || l.startsWith(" ")) lines.push(line++);
                 }
+                if (lines.length) commentable.set(f.filename, lines);
               }
-              prev = l;
+              if (files.length < 100) break;
             }
 
             // Every finding must be a thread, or the gate cannot count it or
