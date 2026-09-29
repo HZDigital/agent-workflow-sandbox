@@ -17,6 +17,7 @@ Everything below exists to keep the second from being steered by the first.
 |---|---|---|
 | `test` check | the GitHub Actions app, running `.github/workflows/test.yml` | **Yes.** Required by the ruleset, pinned to the Actions app |
 | `agent-workflow/gate` commit status | the pipeline, with its PAT | **No — advisory.** The same credential that opens the PR sets it, so it cannot be a security boundary |
+| `claude-review` check + review threads | the GitHub Actions app, running `.github/workflows/claude-review.yml` | **No — advisory.** An input to `agent-workflow/gate`, never required by the ruleset: a reviewer that is wrong, rate-limited or down must not block a merge |
 | "A human clicks merge" | convention | **No — policy only.** See *Known limitations* |
 
 The `test` check is the only gate the automation cannot *report* for itself:
@@ -147,6 +148,20 @@ run that is already going.
 **Suspected leak:** skip step 4. Revoke the old token immediately, accept that
 runs in flight fail, then do steps 1–3 and re-run them.
 
+## The reviewer's credential
+
+`claude-review` runs on the repository secret **`CLAUDE_CODE_OAUTH_TOKEN`**, the
+owner's Claude subscription token from `claude setup-token`. It is set with
+`gh secret set` from the owner's own terminal and never goes through an agent
+session. Only the model step of the `claude-review-analyse` job receives it.
+
+- **Rotation:** run `claude setup-token` again, `gh secret set` the new value, then
+  revoke the old token in the Claude account settings. Write down the expiry date
+  when you create it, because an expired token only shows up as a failed
+  `claude-review` job.
+- **Suspected leak:** revoke it first, then rotate it. Treat any PR that changed
+  `.github/workflows/**` since the last known-good run as the likely source.
+
 ## Comment-author policy
 
 On a public repository every comment is untrusted input. The pipeline acts on a PR
@@ -161,9 +176,32 @@ comment, a review comment or a review **only** if one of these is true:
 - its author's login is on the bot allow-list below, **and** the login ends in
   `[bot]` with `user.type == "Bot"`.
 
-| Allow-listed bot | Why | Source |
+| Allow-listed bot | Why | Extra condition |
 |---|---|---|
-| *Codex bot login — TBD* | cross-AI review | captured in the Codex smoke ticket |
+| `github-actions[bot]` | cross-review findings from `claude-review` (TRACK-2731) | see below; without it, ignored like any other bot |
+
+`github-actions[bot]` is **not** one reviewer. It is whatever any workflow in this
+repository posts with its `GITHUB_TOKEN`, including a workflow edited on a PR
+branch. So the pipeline takes a review thread from it as a **finding**, and as
+nothing else, only if all of these hold:
+
+- the thread's first comment carries `<!-- claude-review:v1 -->`, and it belongs
+  to a review whose body carries `<!-- claude-review:v1 sha=<commit> -->`;
+- a check run named `claude-review`, from GitHub Actions (app `15368`), concluded
+  `success` on that commit;
+- the thread is still unresolved. A thread resolved by anyone other than
+  `github-actions[bot]` counts as **unresolved**: only the reviewer closes its
+  own findings, so the pipeline's PAT cannot turn the gate green by resolving
+  them.
+
+A finding is data for the coding agent. Like every allowed comment, it can steer
+the code change and nothing else. Every other `github-actions[bot]` comment is
+ignored, and review threads from anyone who fails the rules above do not count
+towards the gate, so a stranger cannot stall it by opening threads.
+
+Not allow-listed: `chatgpt-codex-connector[bot]` (Codex, not in use: the
+connector answers but has no account connected, see TRACK-2731) and
+`copilot-pull-request-reviewer[bot]`.
 
 Everything else — `CONTRIBUTOR`, `FIRST_TIMER`, `FIRST_TIME_CONTRIBUTOR`, `NONE`,
 and any bot not on the list — is **ignored**: not acted on, not quoted into an
@@ -211,3 +249,30 @@ Details that matter:
 - **Secrets at rest are a plain file.** The ACL keeps other local accounts out; it
   does not protect against malware running as you. A secrets manager is an M2
   question.
+- **Anyone with write access can read the reviewer's Claude token.** On
+  `pull_request`, GitHub runs the workflow file from the PR itself. A PR that edits
+  `claude-review.yml`, or adds a workflow, gets `CLAUDE_CODE_OAUTH_TOKEN`. That
+  token is the owner's personal Claude subscription token. The pipeline PAT cannot
+  do this, because it has no *Workflows* permission, but every repo admin can.
+  Follow-up: move to an `ANTHROPIC_API_KEY` from a dedicated Console workspace with
+  a spend cap, and put `.github/**` under the CODEOWNERS item above.
+- **The reviewer can be steered.** It reads a diff that the pipeline wrote, so a
+  prompt injection in the code can make it miss a real bug, or report a false one.
+  What limits the damage: it has no shell, no network, no GitHub tools and no
+  write access; reads of `/proc`, `/etc`, `/tmp` and the runner's home are
+  denied; it never sees PR comments; and plain code posts its findings, after
+  scanning them for anything that looks like a credential. It stays advisory, and
+  a human still reads the diff.
+- **The reviewer's CLI is fetched at run time.** The action is pinned to a SHA,
+  but it installs Claude Code with `curl https://claude.ai/install.sh | bash`,
+  so a compromised install origin would run with the token in its environment.
+  This is accepted for M1. The fix is to pre-install a checksummed binary and
+  pass `path_to_claude_code_executable`.
+- **The reviewer shares the coder's quota and blind spots.** Both run on the
+  owner's Claude subscription, so a long implementation run can rate-limit the
+  review. That fails the `claude-review` check, and the gate reads a failed check
+  as "review pending". A same-vendor model is a second opinion, not a cross-vendor
+  check.
+- **Never debug `claude-review`.** Debug logging makes the action log every tool
+  result, and the logs are public. The job refuses to start when
+  `runner.debug == '1'`. Never set `ACTIONS_STEP_DEBUG` in this repository.
