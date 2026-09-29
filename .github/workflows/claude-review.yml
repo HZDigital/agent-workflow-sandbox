@@ -72,6 +72,10 @@ jobs:
         # SHA-pinned for the same reason as in test.yml.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The head, not the default merge ref: findings are anchored on
+          # head-side diff lines, and the merge commit numbers them differently
+          # once main has moved (found by claude-review on PR #5).
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -116,7 +120,7 @@ jobs:
                 }
               }
             }' --jq '.data.repository.pullRequest.reviewThreads.nodes[]
-                      | select((.isResolved | not) or (.resolvedBy.login != "github-actions"))
+                      | select((.isResolved | not) or (.resolvedBy.login != "github-actions[bot]"))
                       | select(.comments.nodes[0].author.login == "github-actions")
                       | select(.comments.nodes[0].body | contains("<!-- claude-review:v1 -->"))
                       | {id, path, line: (.line // .originalLine), body: .comments.nodes[0].body}' \
@@ -156,8 +160,11 @@ jobs:
                - P0: breaks correctness or security for most callers
                - P1: a real bug or risk on a plausible input
                - P2: worth fixing, not dangerous
-               Anchor each finding on a line that appears in the diff, with
-               `line` counted in the NEW version of the file.
+               Anchor each finding on a line that appears in the diff. `line`
+               is the line number in the file as it is checked out now (the
+               `+` side of the diff), NOT a line number in `pr.diff`. Check it
+               by reading the file. If the problem is something missing, such
+               as a test, anchor it on the changed code it is about.
             3. For each open thread, decide whether the current code fixes it.
                Put its id in `fixed_thread_ids` if it does, or in
                `still_open_thread_ids` if it does not. Do NOT repeat a finding
@@ -327,7 +334,10 @@ jobs:
           const ours = new Map(
             threads
               .filter((t) => t.comments.nodes[0]?.author?.login === "github-actions" && t.comments.nodes[0].body.includes(MARKER))
-              .filter((t) => !t.isResolved || t.resolvedBy?.login !== "github-actions")
+              // GraphQL spells the same account two ways: a comment's author
+              // is the Bot "github-actions", a thread's resolvedBy is the User
+              // "github-actions[bot]".
+              .filter((t) => !t.isResolved || t.resolvedBy?.login !== "github-actions[bot]")
               .map((t) => [t.id, t]),
           );
           const resolve = (id) => graphql(`mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id } } }`, { id });
