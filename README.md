@@ -93,14 +93,22 @@ and do not let it pass on a test run that collected nothing.
 
 Two things that are true today and worth stating rather than assuming:
 
-- **The ruleset is not in place yet.** Until it is, `test` is a signal, not a gate.
-  The `rulesets` API answers `200` on this repo — which is the whole reason it is
-  public, since the org's GitHub free plan refuses rulesets on private repos.
+- **`main` is protected by a ruleset**, defined as code in
+  [`.github/rulesets/main.json`](.github/rulesets/main.json): every change needs a
+  pull request, `test` must pass (and only the GitHub Actions app can report it),
+  force-pushes and deletion are blocked, and nobody — admins included — can bypass
+  it. The `agent-workflow/gate` status the
+  pipeline sets is **advisory** — the same credential sets it. The full policy,
+  including the pipeline's token scopes and which comments it may act on, is in
+  [`docs/SECURITY.md`](docs/SECURITY.md).
 - **A required check pins a *name*, not its contents.** A pull request can edit
   `.github/workflows/test.yml` in the same diff the check is gating, and GitHub will
-  happily report the weakened job as green under the required name. Closing that
-  needs a `CODEOWNERS` entry on `.github/**` plus "require review from Code Owners",
-  so a change to the gate needs a human the automation cannot impersonate.
+  happily report the weakened job as green under the required name. The pipeline's
+  token has no *Workflows* permission, so it can't edit `test.yml` — but it *can*
+  edit what the job runs (`package.json`, configs, the tests themselves), and a
+  human can edit either. Closing that needs `CODEOWNERS` over `.github/**` and
+  those files plus "require review from Code Owners" — see
+  [`docs/SECURITY.md`](docs/SECURITY.md#known-limitations).
 
 The actions are pinned to commit SHAs rather than to `@v7`, because a mutable major
 tag can be repointed upstream at code that then runs on every pull request here.
