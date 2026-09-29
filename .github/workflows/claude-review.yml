@@ -102,11 +102,12 @@ jobs:
           fi
           mkdir -p .claude-review
           gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" > .claude-review/pr.diff
-          gh api graphql -F owner="$OWNER" -F name="$NAME" -F pr="$PR" -f query='
-            query($owner: String!, $name: String!, $pr: Int!) {
+          gh api graphql --paginate -F owner="$OWNER" -F name="$NAME" -F pr="$PR" -f query='
+            query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
               repository(owner: $owner, name: $name) {
                 pullRequest(number: $pr) {
-                  reviewThreads(first: 100) {
+                  reviewThreads(first: 100, after: $endCursor) {
+                    pageInfo { hasNextPage endCursor }
                     nodes {
                       id isResolved path line originalLine resolvedBy { login }
                       comments(first: 1) { nodes { author { login } body } }
@@ -114,12 +115,12 @@ jobs:
                   }
                 }
               }
-            }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+            }' --jq '.data.repository.pullRequest.reviewThreads.nodes[]
                       | select((.isResolved | not) or (.resolvedBy.login != "github-actions"))
                       | select(.comments.nodes[0].author.login == "github-actions")
                       | select(.comments.nodes[0].body | contains("<!-- claude-review:v1 -->"))
-                      | {id, path, line: (.line // .originalLine), body: .comments.nodes[0].body}]' \
-            > .claude-review/open-threads.json
+                      | {id, path, line: (.line // .originalLine), body: .comments.nodes[0].body}' \
+            | jq -s . > .claude-review/open-threads.json
 
       - name: Review
         id: review
@@ -178,6 +179,11 @@ jobs:
     timeout-minutes: 5
     permissions:
       pull-requests: write
+      # GitHub requires it for resolveReviewThread / unresolveReviewThread;
+      # pull-requests: write alone gets "Resource not accessible by
+      # integration". The job has no checkout and no model, and main is covered
+      # by the ruleset, which has no bypass.
+      contents: write
 
     steps:
       - name: Post the review and resolve fixed threads
@@ -226,56 +232,73 @@ jobs:
           const SECRET = /sk-ant-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}/;
           if (SECRET.test(FINDINGS)) throw new Error("The findings contain something that looks like a credential. Nothing was posted.");
 
-          // Idempotency: one review per head SHA.
-          const reviews = await gh(`/repos/${REPO}/pulls/${PR}/reviews?per_page=100`);
-          if (reviews.some((r) => r.user?.login === BOT && r.body?.includes(SHA_MARKER))) {
-            console.log(`A claude-review already exists for ${HEAD_SHA}; nothing to do.`);
-            process.exit(0);
+          // Idempotency: one review per head SHA. A re-run skips the post but
+          // still does the thread bookkeeping below, which may be what failed.
+          let posted = false;
+          for (let page = 1; !posted; page++) {
+            const batch = await gh(`/repos/${REPO}/pulls/${PR}/reviews?per_page=100&page=${page}`);
+            posted = batch.some((r) => r.user?.login === BOT && r.body?.includes(SHA_MARKER));
+            if (batch.length < 100) break;
           }
 
-          // GitHub rejects the whole review if one comment is not on a diff
-          // line, so work out which new-side lines the diff actually contains.
-          const diff = await gh(`/repos/${REPO}/pulls/${PR}`, { accept: "application/vnd.github.diff" });
-          const commentable = new Set();
-          let file = null, line = 0, inHunk = false, prev = "";
-          for (const l of diff.split("\n")) {
-            if (l.startsWith("diff --git ")) { file = null; inHunk = false; }
-            else if (!inHunk && l.startsWith("+++ ") && prev.startsWith("--- ")) {
-              file = l === "+++ /dev/null" ? null : l.slice(6);
-            } else {
-              const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
-              if (hunk) { line = Number(hunk[1]); inHunk = true; }
-              else if (inHunk && file && (l.startsWith("+") || l.startsWith(" "))) { commentable.add(`${file}:${line}`); line++; }
+          if (posted) {
+            console.log(`A claude-review already exists for ${HEAD_SHA}; skipping the post.`);
+          } else {
+            // GitHub rejects the whole review if one comment is not on a diff
+            // line, so work out which new-side lines the diff contains.
+            const diff = await gh(`/repos/${REPO}/pulls/${PR}`, { accept: "application/vnd.github.diff" });
+            const commentable = new Map(); // path -> [line, ...] in diff order
+            let file = null, line = 0, inHunk = false, prev = "";
+            for (const l of diff.split("\n")) {
+              if (l.startsWith("diff --git ")) { file = null; inHunk = false; }
+              else if (!inHunk && l.startsWith("+++ ") && prev.startsWith("--- ")) {
+                file = l === "+++ /dev/null" ? null : l.slice(6);
+              } else {
+                const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+                if (hunk) { line = Number(hunk[1]); inHunk = true; }
+                else if (inHunk && file && (l.startsWith("+") || l.startsWith(" "))) {
+                  if (!commentable.has(file)) commentable.set(file, []);
+                  commentable.get(file).push(line++);
+                }
+              }
+              prev = l;
             }
-            prev = l;
+
+            // Every finding must be a thread, or the gate cannot count it or
+            // see it resolved. A finding on a line outside the diff is anchored
+            // on the first diff line of the same file (or of the diff, if its
+            // file is not in it), and says where it really points.
+            const fmt = (f) => `**[${f.severity}] ${f.title}**\n\n${f.body}`;
+            const [firstFile, firstLines] = [...commentable][0] ?? [];
+            const comments = [], orphans = [];
+            for (const f of out.findings) {
+              if (commentable.get(f.path)?.includes(f.line)) {
+                comments.push({ path: f.path, line: f.line, side: "RIGHT", body: `${fmt(f)}\n\n${MARKER}` });
+              } else if (firstFile) {
+                const [path, lines] = commentable.has(f.path) ? [f.path, commentable.get(f.path)] : [firstFile, firstLines];
+                const where = `_This finding is about \`${f.path}:${f.line}\`, which is outside the diff._`;
+                comments.push({ path, line: lines[0], side: "RIGHT", body: `${where}\n\n${fmt(f)}\n\n${MARKER}` });
+              } else {
+                orphans.push(f); // the diff has no new-side lines at all
+              }
+            }
+
+            const n = out.findings.length;
+            const summary = [
+              n === 0 ? `claude-review: no findings on ${HEAD_SHA}` : `claude-review: ${n} finding(s) on ${HEAD_SHA}`,
+              "",
+              ...(orphans.length
+                ? ["The diff has no added or kept lines to attach these to, so they are not threads:", "", ...orphans.map((f) => `- \`${f.path}:${f.line}\`: ${fmt(f)}`), ""]
+                : []),
+              SHA_MARKER,
+            ].join("\n");
+
+            await gh(`/repos/${REPO}/pulls/${PR}/reviews`, {
+              method: "POST",
+              body: JSON.stringify({ commit_id: HEAD_SHA, event: "COMMENT", body: summary, comments }),
+            });
+            console.log(`Posted ${comments.length} thread(s)${orphans.length ? `, ${orphans.length} in the body only` : ""}.`);
           }
-
-          const fmt = (f) => `**[${f.severity}] ${f.title}**\n\n${f.body}`;
-          const inline = [], outside = [];
-          for (const f of out.findings) {
-            (commentable.has(`${f.path}:${f.line}`) ? inline : outside).push(f);
-          }
-
-          const n = out.findings.length;
-          const summary = [
-            n === 0 ? `claude-review: no findings on ${HEAD_SHA}` : `claude-review: ${n} finding(s) on ${HEAD_SHA}`,
-            "",
-            ...(outside.length
-              ? ["These findings point at lines outside the diff, so they could not be threads:", "", ...outside.map((f) => `- \`${f.path}:${f.line}\`: ${fmt(f)}`), ""]
-              : []),
-            SHA_MARKER,
-          ].join("\n");
-
-          await gh(`/repos/${REPO}/pulls/${PR}/reviews`, {
-            method: "POST",
-            body: JSON.stringify({
-              commit_id: HEAD_SHA,
-              event: "COMMENT",
-              body: summary,
-              comments: inline.map((f) => ({ path: f.path, line: f.line, side: "RIGHT", body: `${fmt(f)}\n\n${MARKER}` })),
-            }),
-          });
-          console.log(`Posted ${inline.length} thread(s), ${outside.length} outside the diff.`);
 
           // Only the reviewer closes its own findings: the gate treats a thread
           // resolved by anyone else as open. So for each thread this reviewer
@@ -286,14 +309,23 @@ jobs:
           //                 the UI shows what the gate counts
           // Ids that are not such threads are ignored.
           const [owner, name] = REPO.split("/");
-          const data = await graphql(
-            `query($owner: String!, $name: String!, $pr: Int!) {
-              repository(owner: $owner, name: $name) { pullRequest(number: $pr) {
-                reviewThreads(first: 100) { nodes { id isResolved resolvedBy { login } comments(first: 1) { nodes { author { login } body } } } } } } }`,
-            { owner, name, pr: Number(PR) },
-          );
+          const threads = [];
+          for (let after = null; ; ) {
+            const data = await graphql(
+              `query($owner: String!, $name: String!, $pr: Int!, $after: String) {
+                repository(owner: $owner, name: $name) { pullRequest(number: $pr) {
+                  reviewThreads(first: 100, after: $after) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { id isResolved resolvedBy { login } comments(first: 1) { nodes { author { login } body } } } } } } }`,
+              { owner, name, pr: Number(PR), after },
+            );
+            const page = data.repository.pullRequest.reviewThreads;
+            threads.push(...page.nodes);
+            if (!page.pageInfo.hasNextPage) break;
+            after = page.pageInfo.endCursor;
+          }
           const ours = new Map(
-            data.repository.pullRequest.reviewThreads.nodes
+            threads
               .filter((t) => t.comments.nodes[0]?.author?.login === "github-actions" && t.comments.nodes[0].body.includes(MARKER))
               .filter((t) => !t.isResolved || t.resolvedBy?.login !== "github-actions")
               .map((t) => [t.id, t]),
