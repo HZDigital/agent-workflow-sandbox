@@ -265,6 +265,12 @@ Details that matter:
   denied; it never sees PR comments; and plain code posts its findings, after
   scanning them for anything that looks like a credential. It stays advisory, and
   a human still reads the diff.
+- **The reviewer's post job can push.** GitHub only lets `resolveReviewThread`
+  run with `contents: write`, so the `claude-review` job's `GITHUB_TOKEN` could
+  push to any branch except `main`, which the ruleset protects. The job has no
+  checkout and no model. Its only input is the analyse job's JSON, which it
+  treats as data, and all its code is inline in the workflow file, behind the
+  *Workflows* permission.
 - **The reviewer's CLI is fetched at run time.** The action is pinned to a SHA,
   but it installs Claude Code with `curl https://claude.ai/install.sh | bash`,
   so a compromised install origin would run with the token in its environment.

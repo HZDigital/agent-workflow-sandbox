@@ -100,7 +100,13 @@ jobs:
         run: |
           # The action restores only the ROOT CLAUDE.md and .claude/ from the
           # base branch. A nested one from the PR would load as instructions.
-          if gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only | grep -E '(^|/)(CLAUDE(\.local)?\.md|\.claude/|\.mcp\.json)'; then
+          # Capture the list first, so a failing gh fails the step instead of
+          # feeding grep nothing. Also scan the checked-out tree below the root
+          # (the root copies are the ones the action restores).
+          names=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only)
+          if printf '%s\n' "$names" | grep -E '(^|/)(CLAUDE(\.local)?\.md|\.claude/|\.mcp\.json)' \
+             || find . -path ./.git -prune -o \( -name CLAUDE.md -o -name CLAUDE.local.md -o -name .claude -o -name .mcp.json \) \
+                  ! -path ./CLAUDE.md ! -path ./CLAUDE.local.md ! -path ./.claude ! -path ./.mcp.json -print | grep .; then
             echo "::error::This PR changes Claude configuration, so it cannot be reviewed automatically. A human has to review it."
             exit 1
           fi
@@ -176,7 +182,7 @@ jobs:
           claude_args: |
             --model claude-opus-5-5
             --max-turns 30
-            --disallowedTools "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Read(//proc/**),Read(//sys/**),Read(//etc/**),Read(//tmp/**),Read(//run/**),Read(//home/runner/.*/**),Read(//home/runner/work/_temp/**),Read(//home/runner/work/_actions/**),Read(./.git/**)"
+            --disallowedTools "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Read(//proc/**),Read(//sys/**),Read(//etc/**),Read(//tmp/**),Read(//run/**),Read(//home/runner/.*/**),Read(//home/runner/.*),Read(//home/runner/actions-runner/**),Read(//home/runner/work/_temp/**),Read(//home/runner/work/_actions/**),Read(./.git/**)"
             --json-schema '{"type":"object","additionalProperties":false,"required":["findings","fixed_thread_ids","still_open_thread_ids"],"properties":{"findings":{"type":"array","maxItems":25,"items":{"type":"object","additionalProperties":false,"required":["path","line","severity","title","body"],"properties":{"path":{"type":"string","maxLength":300},"line":{"type":"integer","minimum":1},"severity":{"type":"string","enum":["P0","P1","P2"]},"title":{"type":"string","maxLength":120},"body":{"type":"string","maxLength":2000}}}},"fixed_thread_ids":{"type":"array","maxItems":100,"items":{"type":"string","maxLength":100}},"still_open_thread_ids":{"type":"array","maxItems":100,"items":{"type":"string","maxLength":100}}}}'
 
   post:
@@ -244,7 +250,9 @@ jobs:
           let posted = false;
           for (let page = 1; !posted; page++) {
             const batch = await gh(`/repos/${REPO}/pulls/${PR}/reviews?per_page=100&page=${page}`);
-            posted = batch.some((r) => r.user?.login === BOT && r.body?.includes(SHA_MARKER));
+            // The marker must be the body's last line, which only this script
+            // writes. Model text is neutralised below, so it cannot fake one.
+            posted = batch.some((r) => r.user?.login === BOT && r.body?.trimEnd().endsWith(`\n${SHA_MARKER}`));
             if (batch.length < 100) break;
           }
 
@@ -275,7 +283,14 @@ jobs:
             // see it resolved. A finding on a line outside the diff is anchored
             // on the first diff line of the same file (or of the diff, if its
             // file is not in it), and says where it really points.
-            const fmt = (f) => `**[${f.severity}] ${f.title}**\n\n${f.body}`;
+            // Model text must not be able to forge the markers this script and
+            // the pipeline rely on, or ping people: break up HTML comments and
+            // @mentions in every string the model supplies.
+            const clean = (s) => String(s)
+              .replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;")
+              .replace(/@(?=[A-Za-z0-9])/g, "@​");
+            const code = (s) => clean(s).replace(/`/g, "'");
+            const fmt = (f) => `**[${f.severity}] ${clean(f.title)}**\n\n${clean(f.body)}`;
             const [firstFile, firstLines] = [...commentable][0] ?? [];
             const comments = [], orphans = [];
             for (const f of out.findings) {
@@ -283,7 +298,7 @@ jobs:
                 comments.push({ path: f.path, line: f.line, side: "RIGHT", body: `${fmt(f)}\n\n${MARKER}` });
               } else if (firstFile) {
                 const [path, lines] = commentable.has(f.path) ? [f.path, commentable.get(f.path)] : [firstFile, firstLines];
-                const where = `_This finding is about \`${f.path}:${f.line}\`, which is outside the diff._`;
+                const where = `_This finding is about \`${code(f.path)}:${f.line}\`, which is outside the diff._`;
                 comments.push({ path, line: lines[0], side: "RIGHT", body: `${where}\n\n${fmt(f)}\n\n${MARKER}` });
               } else {
                 orphans.push(f); // the diff has no new-side lines at all
@@ -295,7 +310,7 @@ jobs:
               n === 0 ? `claude-review: no findings on ${HEAD_SHA}` : `claude-review: ${n} finding(s) on ${HEAD_SHA}`,
               "",
               ...(orphans.length
-                ? ["The diff has no added or kept lines to attach these to, so they are not threads:", "", ...orphans.map((f) => `- \`${f.path}:${f.line}\`: ${fmt(f)}`), ""]
+                ? ["The diff has no added or kept lines to attach these to, so they are not threads:", "", ...orphans.map((f) => `- \`${code(f.path)}:${f.line}\`: ${fmt(f)}`), ""]
                 : []),
               SHA_MARKER,
             ].join("\n");
