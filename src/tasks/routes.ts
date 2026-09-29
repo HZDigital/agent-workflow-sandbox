@@ -11,7 +11,7 @@ export function registerTaskRoutes(router: Router, store: TaskStore): Router {
       // Page through the list: fetch enough rows to cover the offset, then cut.
       const offset = parseInt(rawOffset);
       const window = store.list({ ...parsed, limit: parsed.limit + offset });
-      const tasks = window.slice(offset + 1, offset + parsed.limit);
+      const tasks = window.slice(offset, offset + parsed.limit);
       sendJson(res, 200, { tasks, count: tasks.length, offset });
       return;
     }
