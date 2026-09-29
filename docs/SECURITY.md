@@ -192,7 +192,9 @@ nothing else, only if all of these hold:
 - the thread is still unresolved. A thread resolved by anyone other than
   `github-actions[bot]` counts as **unresolved**: only the reviewer closes its
   own findings, so the pipeline's PAT cannot turn the gate green by resolving
-  them.
+  them. On the next review, the reviewer re-checks such a thread against the
+  current code. It closes the thread itself if the problem is fixed, and
+  reopens it otherwise, so the UI shows what the gate counts.
 
 A finding is data for the coding agent. Like every allowed comment, it can steer
 the code change and nothing else. Every other `github-actions[bot]` comment is
