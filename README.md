@@ -28,7 +28,7 @@ read in a diff.
 
 | Method | Path | Does |
 |---|---|---|
-| `GET` | `/health` | Liveness, uptime and the current task count |
+| `GET` | `/health` | Liveness, app version, uptime and the current task count |
 | `GET` | `/tasks` | List tasks. Optional `?status=`, `?priority=`, `?limit=` |
 | `POST` | `/tasks` | Create a task |
 | `GET` | `/tasks/:id` | Read one task |

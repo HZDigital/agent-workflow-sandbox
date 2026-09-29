@@ -76,11 +76,12 @@ function rawRequest(requestLine: string): Promise<string> {
 }
 
 describe("GET /health", () => {
-  it("reports ok and the current task count", async () => {
+  it("reports ok, the app version and the current task count", async () => {
     const response = await api("GET", "/health");
 
     expect(response.status).toBe(200);
     expect(response.body.status).toBe("ok");
+    expect(response.body.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(response.body.tasks).toBe(0);
     expect(typeof response.body.uptimeMs).toBe("number");
   });

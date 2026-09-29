@@ -1,9 +1,16 @@
+import { readFileSync } from "node:fs";
 import { createServer as createHttpServer, type Server } from "node:http";
 
 import { Router } from "./http/router.js";
 import { sendJson } from "./http/json.js";
 import { registerTaskRoutes } from "./tasks/routes.js";
 import { TaskStore } from "./tasks/store.js";
+
+// Read at runtime rather than imported, so the same path works from src/ under
+// Vitest and from dist/ after a build: package.json is one level up from both.
+const { version } = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { version: string };
 
 export interface App {
   server: Server;
@@ -21,6 +28,7 @@ export function createApp(store: TaskStore = new TaskStore()): App {
   router.get("/health", ({ res }) => {
     sendJson(res, 200, {
       status: "ok",
+      version,
       uptimeMs: Date.now() - startedAt,
       tasks: store.size,
     });
