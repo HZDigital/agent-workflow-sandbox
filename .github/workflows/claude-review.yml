@@ -97,18 +97,31 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           OWNER: ${{ github.repository_owner }}
           NAME: ${{ github.event.repository.name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           # The action restores only the ROOT CLAUDE.md and .claude/ from the
           # base branch. A nested one from the PR would load as instructions.
           # Capture the list first, so a failing gh fails the step instead of
           # feeding grep nothing. Also scan the checked-out tree below the root
           # (the root copies are the ones the action restores).
+          # AGENTS.md is NOT restored by the action, yet the base CLAUDE.md
+          # imports it (`@AGENTS.md`), so a PR's copy would load as
+          # instructions too. Refusing a PR that changes it is not enough on
+          # its own: `gh pr diff` reads the PR's current head, not the checked
+          # out SHA, and shows only the new name of a rename. So after the
+          # check, AGENTS.md is also restored from the base commit below.
           names=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only)
-          if printf '%s\n' "$names" | grep -E '(^|/)(CLAUDE(\.local)?\.md|\.claude/|\.mcp\.json)' \
-             || find . -path ./.git -prune -o \( -name CLAUDE.md -o -name CLAUDE.local.md -o -name .claude -o -name .mcp.json \) \
-                  ! -path ./CLAUDE.md ! -path ./CLAUDE.local.md ! -path ./.claude ! -path ./.mcp.json -print | grep .; then
+          if printf '%s\n' "$names" | grep -E '(^|/)(CLAUDE(\.local)?\.md|AGENTS\.md|\.claude/|\.mcp\.json)' \
+             || find . -path ./.git -prune -o \( -name CLAUDE.md -o -name CLAUDE.local.md -o -name AGENTS.md -o -name .claude -o -name .mcp.json \) \
+                  ! -path ./CLAUDE.md ! -path ./CLAUDE.local.md ! -path ./AGENTS.md ! -path ./.claude ! -path ./.mcp.json -print | grep .; then
             echo "::error::This PR changes Claude configuration, so it cannot be reviewed automatically. A human has to review it."
             exit 1
+          fi
+          # Public repo: an anonymous fetch works without persisted credentials.
+          git fetch --quiet --no-tags --depth=1 origin "$BASE_SHA"
+          rm -f AGENTS.md
+          if git cat-file -e "$BASE_SHA:AGENTS.md" 2>/dev/null; then
+            git checkout "$BASE_SHA" -- AGENTS.md
           fi
           mkdir -p .claude-review
           gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" > .claude-review/pr.diff

@@ -262,8 +262,11 @@ Details that matter:
   prompt injection in the code can make it miss a real bug, or report a false one.
   What limits the damage: it has no shell, no network, no GitHub tools and no
   write access; reads of `/proc`, `/etc`, `/tmp` and the runner's home are
-  denied; it never sees PR comments; and plain code posts its findings, after
-  scanning them for anything that looks like a credential. It stays advisory, and
+  denied; it never sees PR comments; it refuses PRs that change its own instructions
+  (`CLAUDE.md`, the `AGENTS.md` that file imports, `.claude/`, `.mcp.json`),
+  and loads only the base branch's copies of them whatever the PR does;
+  and plain code posts its findings, after scanning them for anything that
+  looks like a credential. It stays advisory, and
   a human still reads the diff.
 - **The reviewer's post job can push.** GitHub only lets `resolveReviewThread`
   run with `contents: write`, so the `claude-review` job's `GITHUB_TOKEN` could
