@@ -20,6 +20,9 @@ Two rules follow from that:
   to keep working, it needs a test — that is the only thing the pipeline is
   required to respect.
 
+Coding agents (and humans working like one) start with [`AGENTS.md`](AGENTS.md):
+commands, landmines and the pipeline's workflow rules.
+
 ## The app
 
 A small task-tracker HTTP API on Node's built-in `http` module. No framework, no
